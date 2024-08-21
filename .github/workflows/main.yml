@@ -1,36 +1,230 @@
-# This is a basic workflow to help you get started with Actions
+name: Deployment Submodules CI/CD
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
+    tags:
+      - 'v*'
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+env: 
+  IMAGE_TAG:
+  S3_BUCKET_DEV:
+  CODE_DEPLOY_APPLICATION_NAME:
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+  branch_check:
+    name: Branch Check
+    runs-on: RUNNER-LINUX7-135
+    permissions:
+      packages: write
+      contents: write
+      id-token: write
+    outputs:
+      branch: ${{ steps.get_branch.outputs.branch }}
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Get Current Branch
+        id: get_branch
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+
+  check_modified_directory:
+    name: Check Modified Directory
+    runs-on: RUNNER-LINUX7-135
+    needs: [branch_check]
+    permissions:
+      packages: write
+      contents: write
+      id-token: write
+    outputs:
+      dirs: ${{ steps.modified-dirs.outputs.modified_dirs }}
+      is_modified: ${{ steps.modified-dirs.outputs.is_modified_dirs }}
+    steps:
+      - name: Check Out Repo
+        uses: actions/checkout@v3
+        with: 
+          submodules: true
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Remove Extra Header if it Exists
+        run: /usr/bin/git config --local --unset-all http.url || true
+
+      - name: List All Tags
+        run: git tag --sort=-creatordate
+
+      - name: Get Current Tag
+        id: get_current_tag
+        run: |
+          echo "current_tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      - name: Get Previous Tag
+        id: get_previous_tag
+        run: |
+          echo "current: ${{ env.current_tag }}"
+          previous_tag=$(git tag --sort=-creatordate | grep -A 1 ${{ env.current_tag }} | tail -n 1)
+          echo "previous_tag=${previous_tag}" >> $GITHUB_ENV
+
+      - name: Output Tags
+        run: |
+          echo "Current Tag: ${{ env.current_tag }}"
+          echo "Previous Tag: ${{ env.previous_tag }}"
+
+      - name: Check Diff
+        id: modified-dirs
+        run: |
+          dirs=$(git diff --name-only ${{ env.current_tag }} ${{ env.previous_tag }})
+          if [[ -z "$dirs" ]]; then
+            echo "==========Modified Directory: none =============="
+            echo "is_modified_dirs=false" >> $GITHUB_OUTPUT
+          else
+            dirs=$(echo $dirs | tr '\n' ' ')
+            echo "===========Modified Directory: $dirs =============="
+            echo "modified_dirs=$dirs" >> $GITHUB_OUTPUT
+            echo "is_modified_dirs=true" >> $GITHUB_OUTPUT
+          fi
+          echo "======is modified: $(grep 'is_modified_dirs' $GITHUB_OUTPUT | cut -d'=' -f2) =========="
+
+  code_build_dev_server:
+    name: Dev - Build
+    needs: [branch_check, check_modified_directory]
+    if: ${{ needs.check_modified_directory.outputs.is_modified == 'true' }}
+    runs-on: RUNNER-LINUX7-135        
+    environment:
+      name: dev
+    permissions:
+      packages: write
+      contents: write
+      id-token: write
+    outputs:
+      deploymentid: ${{ steps.buildpush.outputs.deploymentid }}
+    steps:
+      - name: Check Out the Repo
+        uses: actions/checkout@v3
+        with:
+          submodules: true
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-southeast-1
+
+      - name: Build & Push Code to Amazon S3
+        id: buildpush
+        env:
+          S3_BUCKET: ${{ env.S3_BUCKET_DEV }}
+          CHANGED_SUBMODULES: ${{ needs.check_modified_directory.outputs.dirs }}
+        run: |
+          echo "==== MODIFIED DIRECTORY TO BE BUILT: $CHANGED_SUBMODULES ===="
+  
+          tag=$(date +%Y%m%d%H%M)-${GITHUB_RUN_NUMBER}
+          echo "deploymentid=$tag" >> $GITHUB_OUTPUT
+          echo "==== Generated tag: $tag ====" 
+            
+          for modified_dir in $CHANGED_SUBMODULES; do
+            echo "==== BUILDING CODE FOR $modified_dir ===="
+            
+            cd $modified_dir
+            
+            # Assuming each submodule has its own build script or process defined
+            if [ -f "build.sh" ]; then
+              echo "Running custom build script for $modified_dir"
+              chmod +x build.sh
+              ./build.sh
+            else
+              echo "No custom build script found for $modified_dir. Skipping build."
+            fi
+
+            cd ..
+            
+            mkdir -p build_$modified_dir
+            
+            ls -l
+            cp -r ./$modified_dir/* ./build_$modified_dir/
+            cp ./script/before_install.sh ./build_$modified_dir/
+            cp ./script/after_install.sh ./build_$modified_dir/
+            cp ./script/application_start.sh ./build_$modified_dir/
+            cp ./appspec.yml ./build_$modified_dir/
+            ls -l ./build_$modified_dir
+            
+            artifact_name="$modified_dir-$tag.zip"
+            echo "==== Generated artifact name: $artifact_name ====" 
+            zip -r ./$artifact_name ./build_$modified_dir > /dev/null
+              
+            echo "==== Uploading to S3: s3://$S3_BUCKET/app/$modified_dir/$artifact_name ===="
+            aws s3 cp $artifact_name s3://$S3_BUCKET/app/$modified_dir/$artifact_name
+          done
+
+  code_deploy_dev_server:
+    name: Dev - Deployment
+    runs-on: RUNNER-LINUX7-135
+    environment:
+      name: dev
+    needs: [check_modified_directory, code_build_dev_server]
+    permissions:
+      packages: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_CODE_DEPLOY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_CODE_DEPLOY }}
+          aws-region: ap-southeast-1
+      
+      - name: Create CodeDeploy Deployment
+        id: deploy
+        env:
+          S3_BUCKET_NAME: ${{ env.S3_BUCKET_DEV }}
+          BUNDLE_TYPE: zip
+          CHANGED_SUBMODULES: ${{ needs.check_modified_directory.outputs.dirs }}
+          TAG: ${{ env.IMAGE_TAG }}
+          APP_NAME: ${{ env.CODE_DEPLOY_APPLICATION_NAME }}
+          DEPLOYMENT_ID: ${{ needs.code_build_dev_server.outputs.deploymentid }}
+          DEPLOYMENT_STATUS: "Succeeded"
+        run: |
+          echo "==== MODIFIED DIRECTORY TO BE DEPLOYED: $CHANGED_SUBMODULES ===="
+          echo "==== INITIAL DEPLOYMENT ID: $DEPLOYMENT_ID ===="
+          
+          for modified_dir in $CHANGED_SUBMODULES; do
+            echo "==== DEPLOYING FOR $modified_dir ===="
+            deployment_id=$(aws deploy create-deployment \
+              --application-name $APP_NAME \
+              --deployment-group-name $modified_dir \
+              --file-exists-behavior OVERWRITE \
+              --auto-rollback-configuration enabled=false \
+              --s3-location bucket=$S3_BUCKET_NAME,key=arr-qrpush/$modified_dir/$modified_dir-$DEPLOYMENT_ID.$BUNDLE_TYPE,bundleType=$BUNDLE_TYPE \
+              --query "deploymentId" --output text)
+      
+            echo "==== DEPLOYMENT ID FOR $modified_dir: $deployment_id ===="
+            
+            while true; do
+              status=$(aws deploy get-deployment --deployment-id $deployment_id --query "deploymentInfo.status" --output text)
+              echo "==== CURRENT DEPLOYMENT STATUS FOR $modified_dir: $status ===="
+      
+              if [ "$status" == "Succeeded" ]; then
+                echo "==== DEPLOYMENT SUCCEEDED FOR $modified_dir ===="
+                break
+              elif [ "$status" == "Failed" ] || [ "$status" == "Stopped" ]; then
+                echo "==== DEPLOYMENT FAILED OR STOPPED FOR $modified_dir. FLAGGING ===="
+                DEPLOYMENT_STATUS="Failed"
+                break
+              else
+                echo "==== DEPLOYMENT IN PROGRESS FOR $modified_dir. WAITING... ===="
+                sleep 10
+              fi
+            done
+          done
+          
+          echo "DEPLOYMENT_STATUS=$DEPLOYMENT_STATUS" >> $GITHUB_ENV
+          echo "Final Deployment Status: $DEPLOYMENT_STATUS"
+
+      - name: Fail Pipeline if Deployment Failed
+        if: env.DEPLOYMENT_STATUS == 'Failed'
+        run: |
+          echo "Deployment failed. Exiting with error."
+          exit 1

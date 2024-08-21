@@ -1,0 +1,15 @@
+[submodule "kubenetes"]
+	path = kubenetes
+	url = https://github.com/tamtamcoding/kubenetes.git
+[submodule "cicd-aws-devops"]
+	path = cicd-aws-devops
+	url = https://github.com/tamtamcoding/cicd-aws-devops.git
+[submodule "eks-devops"]
+	path = eks-devops
+	url = https://github.com/tamtamcoding/eks-devops.git
+[submodule "bank"]
+	path = bank
+	url = https://github.com/tamtamcoding/bank.git
+[submodule "website-html"]
+	path = website-html
+	url = https://github.com/tamtamcoding/website-html.git

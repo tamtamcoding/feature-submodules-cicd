@@ -118,8 +118,8 @@ jobs:
       - name: Build & Push Code to Amazon S3
         id: buildpush
         env:
-          S3_BUCKET: ${{ env.S3_BUCKET_DEV }}
-          CHANGED_SUBMODULES: ${{ needs.check_modified_directory.outputs.dirs }}
+          S3_BUCKET: app-submodules-cicd
+          CHANGED_SUBMODULES: app-submodules-cicd
         run: |
           echo "==== MODIFIED DIRECTORY TO BE BUILT: $CHANGED_SUBMODULES ===="
           
@@ -195,41 +195,51 @@ jobs:
           DEPLOYMENT_ID: ${{ needs.code_build_dev_server.outputs.deploymentid }}
           DEPLOYMENT_STATUS: "Succeeded"
         run: |
-          echo "==== MODIFIED DIRECTORY TO BE DEPLOYED: $CHANGED_SUBMODULES ===="
-          echo "==== INITIAL DEPLOYMENT ID: $DEPLOYMENT_ID ===="
-          
-          for modified_dir in $CHANGED_SUBMODULES; do
-            echo "==== DEPLOYING FOR $modified_dir ===="
-            deployment_id=$(aws deploy create-deployment \
-              --application-name $APP_NAME \
-              --deployment-group-name $modified_dir \
-              --file-exists-behavior OVERWRITE \
-              --auto-rollback-configuration enabled=false \
-              --s3-location bucket=$S3_BUCKET_NAME,key=app/$modified_dir/$modified_dir-$DEPLOYMENT_ID.$BUNDLE_TYPE,bundleType=$BUNDLE_TYPE \
-              --query "deploymentId" --output text)
-      
-            echo "==== DEPLOYMENT ID FOR $modified_dir: $deployment_id ===="
-            
-            while true; do
-              status=$(aws deploy get-deployment --deployment-id $deployment_id --query "deploymentInfo.status" --output text)
-              echo "==== CURRENT DEPLOYMENT STATUS FOR $modified_dir: $status ===="
-      
-              if [ "$status" == "Succeeded" ]; then
-                echo "==== DEPLOYMENT SUCCEEDED FOR $modified_dir ===="
-                break
-              elif [ "$status" == "Failed" ] || [ "$status" == "Stopped" ]; then
-                echo "==== DEPLOYMENT FAILED OR STOPPED FOR $modified_dir. FLAGGING ===="
-                DEPLOYMENT_STATUS="Failed"
-                break
-              else
-                echo "==== DEPLOYMENT IN PROGRESS FOR $modified_dir. WAITING... ===="
-                sleep 10
-              fi
-            done
-          done
-          
-          echo "DEPLOYMENT_STATUS=$DEPLOYMENT_STATUS" >> $GITHUB_ENV
-          echo "Final Deployment Status: $DEPLOYMENT_STATUS"
+            Run echo "==== MODIFIED DIRECTORY TO BE DEPLOYED: $CHANGED_SUBMODULES ===="
+              echo "==== INITIAL DEPLOYMENT ID: $DEPLOYMENT_ID ===="
+              
+              # Initialize deployment status
+              DEPLOYMENT_STATUS="Succeeded"
+
+              # Iterate over each modified directory or file
+              for item in $CHANGED_SUBMODULES; do
+                echo "==== DEPLOYING FOR $item ===="
+                
+                # Ensure the item is a valid directory or file
+                if [ -d "$item" ] || [ -f "$item" ]; then
+                  deployment_id=$(aws deploy create-deployment \
+                    --application-name "$APP_NAME" \
+                    --deployment-group-name "$item" \
+                    --file-exists-behavior OVERWRITE \
+                    --auto-rollback-configuration enabled=false \
+                    --s3-location bucket="$S3_BUCKET_NAME",key="app/$item/$item-$DEPLOYMENT_ID.$BUNDLE_TYPE",bundleType="$BUNDLE_TYPE" \
+                    --query "deploymentId" --output text)
+              
+                  echo "==== DEPLOYMENT ID FOR $item: $deployment_id ===="
+                  
+                  while true; do
+                    status=$(aws deploy get-deployment --deployment-id "$deployment_id" --query "deploymentInfo.status" --output text)
+                    echo "==== CURRENT DEPLOYMENT STATUS FOR $item: $status ===="
+              
+                    if [ "$status" == "Succeeded" ]; then
+                      echo "==== DEPLOYMENT SUCCEEDED FOR $item ===="
+                      break
+                    elif [ "$status" == "Failed" ] || [ "$status" == "Stopped" ]; then
+                      echo "==== DEPLOYMENT FAILED OR STOPPED FOR $item. FLAGGING ===="
+                      DEPLOYMENT_STATUS="Failed"
+                      break
+                    else
+                      echo "==== DEPLOYMENT IN PROGRESS FOR $item. WAITING... ===="
+                      sleep 10
+                    fi
+                  done
+                else
+                  echo "==== $item is not a valid directory or file. Skipping. ===="
+                fi
+              done
+              
+              echo "DEPLOYMENT_STATUS=$DEPLOYMENT_STATUS" >> $GITHUB_ENV
+              echo "Final Deployment Status: $DEPLOYMENT_STATUS"
 
       - name: Fail Pipeline if Deployment Failed
         if: env.DEPLOYMENT_STATUS == 'Failed'

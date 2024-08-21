@@ -53,11 +53,22 @@ jobs:
       - name: Get Previous Tag
         id: get_previous_tag
         run: |
-          echo "current: ${{ env.current_tag }}"
-          # List tags sorted by creation date, get the list up to the current tag, then get the last one.
-          previous_tag=$(git tag --sort=-creatordate | grep -B 1 ${{ env.current_tag }} | head -n 1)
-          echo "previous_tag=${previous_tag}" >> $GITHUB_ENV
-          
+              echo "current: ${{ env.current_tag }}"
+
+              # List all tags sorted by creation date in descending order
+              tags=$(git tag --sort=-creatordate)
+
+              # Find the previous tag
+              current_tag_index=$(echo "$tags" | grep -n "${{ env.current_tag }}" | cut -d: -f1)
+              if [ -z "$current_tag_index" ]; then
+                echo "Current tag not found in the list of tags."
+                previous_tag=""
+              else
+                previous_tag=$(echo "$tags" | sed -n "$((current_tag_index + 1))p")
+              fi
+
+              echo "previous_tag=${previous_tag}" >> $GITHUB_ENV
+
       - name: Output Tags
         run: |
           echo "Current Tag: ${{ env.current_tag }}"

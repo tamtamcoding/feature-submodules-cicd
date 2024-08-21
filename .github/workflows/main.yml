@@ -6,10 +6,6 @@ on:
       - 'v*'
   workflow_dispatch:
 
-env: 
-  IMAGE_TAG:
-  S3_BUCKET_DEV:
-  CODE_DEPLOY_APPLICATION_NAME:
 
 jobs:
   branch_check:
@@ -43,12 +39,8 @@ jobs:
         uses: actions/checkout@v3
         with: 
           submodules: true
-          token: ${{ secrets.PAT_TOKEN }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Remove Extra Header if it Exists
-        run: /usr/bin/git config --local --unset-all http.url || true
 
       - name: List All Tags
         run: git tag --sort=-creatordate
@@ -197,7 +189,7 @@ jobs:
               --deployment-group-name $modified_dir \
               --file-exists-behavior OVERWRITE \
               --auto-rollback-configuration enabled=false \
-              --s3-location bucket=$S3_BUCKET_NAME,key=arr-qrpush/$modified_dir/$modified_dir-$DEPLOYMENT_ID.$BUNDLE_TYPE,bundleType=$BUNDLE_TYPE \
+              --s3-location bucket=$S3_BUCKET_NAME,key=app/$modified_dir/$modified_dir-$DEPLOYMENT_ID.$BUNDLE_TYPE,bundleType=$BUNDLE_TYPE \
               --query "deploymentId" --output text)
       
             echo "==== DEPLOYMENT ID FOR $modified_dir: $deployment_id ===="

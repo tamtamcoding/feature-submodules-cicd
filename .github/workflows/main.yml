@@ -14,7 +14,7 @@ env:
 jobs:
   branch_check:
     name: Branch Check
-    runs-on: RUNNER-LINUX7-135
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: write
@@ -29,7 +29,7 @@ jobs:
 
   check_modified_directory:
     name: Check Modified Directory
-    runs-on: RUNNER-LINUX7-135
+    runs-on: ubuntu-latest
     needs: [branch_check]
     permissions:
       packages: write
@@ -89,7 +89,7 @@ jobs:
     name: Dev - Build
     needs: [branch_check, check_modified_directory]
     if: ${{ needs.check_modified_directory.outputs.is_modified == 'true' }}
-    runs-on: RUNNER-LINUX7-135        
+    runs-on: ubuntu-latest        
     environment:
       name: dev
     permissions:
@@ -160,7 +160,7 @@ jobs:
 
   code_deploy_dev_server:
     name: Dev - Deployment
-    runs-on: RUNNER-LINUX7-135
+    runs-on: ubuntu-latest
     environment:
       name: dev
     needs: [check_modified_directory, code_build_dev_server]

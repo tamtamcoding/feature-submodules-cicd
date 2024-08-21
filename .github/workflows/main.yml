@@ -122,44 +122,49 @@ jobs:
           CHANGED_SUBMODULES: ${{ needs.check_modified_directory.outputs.dirs }}
         run: |
           echo "==== MODIFIED DIRECTORY TO BE BUILT: $CHANGED_SUBMODULES ===="
-  
+          
           tag=$(date +%Y%m%d%H%M)-${GITHUB_RUN_NUMBER}
           echo "deploymentid=$tag" >> $GITHUB_OUTPUT
-          echo "==== Generated tag: $tag ====" 
-            
+          echo "==== Generated tag: $tag ===="
+          
+          # Iterate over each modified directory
           for modified_dir in $CHANGED_SUBMODULES; do
-            echo "==== BUILDING CODE FOR $modified_dir ===="
-            
-            cd $modified_dir
-            
-            # Assuming each submodule has its own build script or process defined
-            if [ -f "build.sh" ]; then
-              echo "Running custom build script for $modified_dir"
-              chmod +x build.sh
-              ./build.sh
-            else
-              echo "No custom build script found for $modified_dir. Skipping build."
-            fi
-
-            cd ..
-            
-            mkdir -p build_$modified_dir
-            
-            ls -l
-            cp -r ./$modified_dir/* ./build_$modified_dir/
-            cp ./script/before_install.sh ./build_$modified_dir/
-            cp ./script/after_install.sh ./build_$modified_dir/
-            cp ./script/application_start.sh ./build_$modified_dir/
-            cp ./appspec.yml ./build_$modified_dir/
-            ls -l ./build_$modified_dir
-            
-            artifact_name="$modified_dir-$tag.zip"
-            echo "==== Generated artifact name: $artifact_name ====" 
-            zip -r ./$artifact_name ./build_$modified_dir > /dev/null
+            # Check if it's a directory before proceeding
+            if [ -d "$modified_dir" ]; then
+              echo "==== BUILDING CODE FOR $modified_dir ===="
               
-            echo "==== Uploading to S3: s3://$S3_BUCKET/app/$modified_dir/$artifact_name ===="
-            aws s3 cp $artifact_name s3://$S3_BUCKET/app/$modified_dir/$artifact_name
+              cd $modified_dir || { echo "Failed to enter directory $modified_dir"; exit 1; }
+              
+              # Run custom build script if it exists
+              if [ -f "build.sh" ]; then
+                echo "Running custom build script for $modified_dir"
+                chmod +x build.sh
+                ./build.sh
+              else
+                echo "No custom build script found for $modified_dir. Skipping build."
+              fi
+
+              cd ..
+              
+              # Prepare build directory and artifacts
+              mkdir -p build_$modified_dir
+              cp -r ./$modified_dir/* ./build_$modified_dir/
+              cp ./script/before_install.sh ./build_$modified_dir/
+              cp ./script/after_install.sh ./build_$modified_dir/
+              cp ./script/application_start.sh ./build_$modified_dir/
+              cp ./appspec.yml ./build_$modified_dir/
+              
+              artifact_name="$modified_dir-$tag.zip"
+              echo "==== Generated artifact name: $artifact_name ====" 
+              zip -r ./$artifact_name ./build_$modified_dir > /dev/null
+              
+              echo "==== Uploading to S3: s3://$S3_BUCKET/app/$modified_dir/$artifact_name ===="
+              aws s3 cp $artifact_name s3://$S3_BUCKET/app/$modified_dir/$artifact_name
+            else
+              echo "==== $modified_dir is not a directory or does not exist. Skipping. ===="
+            fi
           done
+
 
   code_deploy_dev_server:
     name: Dev - Deployment
